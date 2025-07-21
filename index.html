@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Solar System</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            background-color: #000;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #info-panel {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.85);
+            border: 2px solid #00f;
+            border-radius: 15px;
+            padding: 25px;
+            max-width: 80%;
+            max-height: 80%;
+            overflow-y: auto;
+            box-shadow: 0 0 30px rgba(0, 200, 255, 0.6);
+            display: none; /* Hidden by default */
+            z-index: 1000;
+            text-align: center;
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+        }
+        #info-panel h2 {
+            color: #00f;
+            margin-top: 0;
+            margin-bottom: 15px;
+            font-size: 2em;
+            text-shadow: 0 0 10px #00f;
+        }
+        #info-panel p {
+            margin-bottom: 10px;
+            line-height: 1.6;
+            font-size: 1.1em;
+        }
+        #info-panel button {
+            background-color: #00f;
+            color: #fff;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1.1em;
+            margin-top: 20px;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            box-shadow: 0 5px 15px rgba(0, 200, 255, 0.4);
+        }
+        #info-panel button:hover {
+            background-color: #00a;
+            transform: translateY(-2px);
+        }
+        #loading-indicator {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00f;
+            font-size: 1.5em;
+            text-shadow: 0 0 10px #00f;
+            display: none;
+            z-index: 1001;
+        }
+        #audio-control {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            cursor: pointer;
+            background-color: rgba(0, 0, 0, 0.6);
+            border-radius: 50%;
+            padding: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 10px rgba(0, 200, 255, 0.4);
+            transition: background-color 0.3s ease;
+        }
+        #audio-control:hover {
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+        #audio-control svg {
+            width: 24px;
+            height: 24px;
+            fill: #fff; /* Changed to white */
+        }
+    </style>
+</head>
+<body>
+    <div id="loading-indicator">Loading planet data...</div>
+    <div id="info-panel">
+        <h2 id="planet-name"></h2>
+        <p id="planet-description"></p>
+        <button onclick="hideInfoPanel()">Close</button>
+    </div>
+    <div id="audio-control" onclick="toggleMusic()">
+        <svg id="audio-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.81 5 3.54 5 6.71s-2.11 5.9-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+        </svg>
+    </div>
+
+    <script type="module">
+        // Global variables for Firebase configuration and app ID
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+
+        // Three.js scene setup
+        let scene, camera, renderer, controls;
+        const planets = [];
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        // Tone.js audio setup
+        let synth, loop, isPlaying = false;
+        const audioIcon = document.getElementById('audio-icon');
+
+        // Sun flare particles
+        const sunFlareParticles = [];
+        const maxFlareParticles = 50;
+        const flareParticleMaterial = new THREE.PointsMaterial({
+            color: 0xFFA500, // Orange glow
+            size: 0.8,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const flareParticleGeometry = new THREE.BufferGeometry();
+        const flarePositions = new Float32Array(maxFlareParticles * 3);
+        const flareOpacities = new Float32Array(maxFlareParticles);
+        flareParticleGeometry.setAttribute('position', new THREE.BufferAttribute(flarePositions, 3));
+        flareParticleGeometry.setAttribute('opacity', new THREE.BufferAttribute(flareOpacities, 1));
+        let flareParticleSystem;
+
+        // Planet data with adjusted sizes and distances for educational clarity
+        // Sizes are made more uniform and larger for clickability.
+        // Distances are significantly reduced to bring planets closer together.
+        const planetData = {
+            Sun: {
+                radius: 10, // Sun remains large as the central body
+                color: 0xFDB813, // Yellow/Orange
+                emissive: 0xFDB813,
+                description: "The Sun is the star at the centre of the Solar System. It is a nearly perfect sphere of hot plasma, heated to incandescence by nuclear fusion reactions in its core. The Sun has been worshipped by many cultures throughout history. It provides light and heat, making life on Earth possible, and its immense gravity holds the entire solar system together.",
+                distance: 0,
+                orbitalPeriod: 0
+            },
+            Mercury: {
+                radius: 1.5, // Increased size for clickability
+                color: 0x8A8A8A, // Grey
+                emissive: 0x000000,
+                description: "Mercury is the smallest planet in our Solar System and closest to the Sun. It is a terrestrial planet with a heavily cratered surface, similar in appearance to the Moon. Its thin atmosphere means extreme temperature swings between day and night, making it a harsh environment.",
+                distance: 15, // Reduced distance
+                orbitalPeriod: 0.24 // Earth years
+            },
+            Venus: {
+                radius: 2, // Increased size for clickability
+                color: 0xE6D8AD, // Pale yellow/brown (cloudy atmosphere)
+                emissive: 0x000000,
+                description: "Venus is the second planet from the Sun, named after the Roman goddess of love and beauty. It is often called Earth's 'sister planet' due to its similar size, but its thick, toxic atmosphere creates an extreme greenhouse effect, making it the hottest planet in our solar system.",
+                distance: 25, // Reduced distance
+                orbitalPeriod: 0.62
+            },
+            Earth: {
+                radius: 2.2, // Increased size for clickability
+                color: 0x0077BE, // Blue (oceans) and Green (land) - simplified to blue
+                emissive: 0x000000,
+                description: "Earth is the third planet from the Sun and the only astronomical object known to harbour life. About 29% of Earth's surface is land consisting of continents and islands, while the remaining 71% is covered by water. Its unique atmosphere and liquid water make it a vibrant and diverse home.",
+                distance: 35, // Reduced distance
+                orbitalPeriod: 1,
+                hasMoon: true,
+                moonRadius: 0.5, // Moon's radius relative to Earth's scaled radius
+                moonDistance: 3.5 // Moon's orbital distance from Earth
+            },
+            Mars: {
+                radius: 1.8, // Increased size for clickability
+                color: 0xC1440E, // Red/Orange
+                emissive: 0x000000,
+                description: "Mars is the fourth planet from the Sun and the second-smallest planet in the Solar System. It is often referred to as the 'Red Planet' because of its reddish appearance, caused by iron oxide on its surface. Mars has a thin atmosphere and polar ice caps, and is a major focus for future human exploration.",
+                distance: 45, // Reduced distance
+                orbitalPeriod: 1.88
+            },
+            Jupiter: {
+                radius: 4, // Still largest, but scaled down relative to previous version
+                color: 0xD8CA9D, // Orange/Brown bands
+                emissive: 0x000000,
+                description: "Jupiter is the fifth planet from the Sun and the largest in the Solar System. It is a gas giant with a mass more than two and a half times that of all the other planets in the Solar System combined. Its most famous feature is the Great Red Spot, a colossal storm larger than Earth.",
+                distance: 60, // Reduced distance
+                orbitalPeriod: 11.86
+            },
+            Saturn: {
+                radius: 3.5, // Still large, but scaled down relative to previous version
+                color: 0xD1C7A9, // Pale yellow/brown
+                emissive: 0x000000,
+                description: "Saturn is the sixth planet from the Sun and the second-largest in the Solar System, after Jupiter. It is a gas giant with a prominent system of rings, composed of countless ice particles ranging in size from micrometres to metres. These rings are truly a marvel of the solar system.",
+                distance: 75, // Reduced distance
+                orbitalPeriod: 29.46
+            },
+            Uranus: {
+                radius: 2.5, // Increased size for clickability
+                color: 0x93B8C0, // Light blue/cyan
+                emissive: 0x000000,
+                description: "Uranus is the seventh planet from the Sun. It is an ice giant; its mass is 14.5 times that of Earth. Uniquely, Uranus rotates on its side, with its axis tilted nearly parallel to its orbit, leading to extreme seasonal changes.",
+                distance: 90, // Reduced distance
+                orbitalPeriod: 84.01
+            },
+            Neptune: {
+                radius: 2.4, // Increased size for clickability
+                color: 0x3667B0, // Dark blue
+                emissive: 0x000000,
+                description: "Neptune is the eighth and farthest known planet from the Sun in the Solar System. It is the fourth-largest planet by diameter and the third-most massive planet. Known for its strong winds and dynamic storms, Neptune is a cold and distant ice giant.",
+                distance: 105, // Reduced distance
+                orbitalPeriod: 164.79
+            }
+        };
+
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 50, 150); // Adjust camera position for better view of closer planets
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true; // Animate damping
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 10;
+            controls.maxDistance = 200; // Adjusted max distance for closer planets
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0x333333); // Soft ambient light
+            scene.add(ambientLight);
+
+            const pointLight = new THREE.PointLight(0xffffff, 2, 0); // Sun's light
+            pointLight.position.set(0, 0, 0);
+            scene.add(pointLight);
+
+            // Create Sun
+            const sunGeometry = new THREE.SphereGeometry(planetData.Sun.radius, 64, 64);
+            const sunMaterial = new THREE.MeshBasicMaterial({
+                color: planetData.Sun.color,
+                emissive: planetData.Sun.emissive,
+                emissiveIntensity: 1 // Make the sun glow
+            });
+            const sun = new THREE.Mesh(sunGeometry, sunMaterial);
+            sun.name = 'Sun'; // Name for raycasting
+            scene.add(sun);
+            planets.push(sun); // Add sun to planets array for raycasting
+
+            // Initialise sun flare particle system
+            flareParticleSystem = new THREE.Points(flareParticleGeometry, flareParticleMaterial);
+            scene.add(flareParticleSystem);
+
+            // Create Planets
+            for (const name in planetData) {
+                if (name === 'Sun') continue; // Skip Sun, already created
+
+                const data = planetData[name];
+                const geometry = new THREE.SphereGeometry(data.radius, 32, 32);
+                const material = new THREE.MeshStandardMaterial({
+                    color: data.color,
+                    emissive: data.emissive,
+                    metalness: 0.1,
+                    roughness: 0.8
+                });
+                const planet = new THREE.Mesh(geometry, material);
+                planet.name = name; // Name for raycasting
+
+                // Create an empty object to hold the planet and act as its orbital centre
+                const planetOrbit = new THREE.Object3D();
+                planetOrbit.add(planet);
+                scene.add(planetOrbit);
+
+                // Position the planet within its orbit object
+                planet.position.x = data.distance;
+
+                // Store the planet and its orbit for animation and raycasting
+                planets.push(planet);
+                planet.userData.orbit = planetOrbit; // Store reference to orbit object
+                planet.userData.orbitalPeriod = data.orbitalPeriod; // Store orbital period
+
+                // Add orbital path for the planet
+                if (name !== 'Sun') { // No orbit for the Sun itself
+                    const orbitGeometry = new THREE.RingGeometry(data.distance - 0.1, data.distance + 0.1, 128); // Thin ring
+                    const orbitMaterial = new THREE.MeshBasicMaterial({
+                        color: 0x444444, // Dark grey for orbit line
+                        side: THREE.DoubleSide,
+                        transparent: true,
+                        opacity: 0.3
+                    });
+                    const orbitLine = new THREE.Mesh(orbitGeometry, orbitMaterial);
+                    orbitLine.rotation.x = Math.PI / 2; // Rotate to lie flat on the XZ plane
+                    scene.add(orbitLine);
+                }
+
+
+                // Add Saturn's rings if it's Saturn
+                if (name === 'Saturn') {
+                    // Adjust ring size to be proportional to the new, larger Saturn
+                    const ringGeometry = new THREE.TorusGeometry(data.radius * 1.5, data.radius * 0.3, 2, 100);
+                    const ringMaterial = new THREE.MeshBasicMaterial({
+                        color: 0x8B7C6E, // Grey/brown for rings
+                        side: THREE.DoubleSide
+                    });
+                    const rings = new THREE.Mesh(ringGeometry, ringMaterial);
+                    rings.rotation.x = Math.PI / 2; // Orient rings horizontally
+                    planet.add(rings); // Add rings as a child of Saturn
+                }
+
+                // Add Moon for Earth
+                if (name === 'Earth' && data.hasMoon) {
+                    const moonGeometry = new THREE.SphereGeometry(data.moonRadius, 16, 16);
+                    const moonMaterial = new THREE.MeshStandardMaterial({
+                        color: 0x888888, // Grey for moon
+                        emissive: 0x000000,
+                        metalness: 0.1,
+                        roughness: 0.8
+                    });
+                    const moon = new THREE.Mesh(moonGeometry, moonMaterial);
+                    moon.name = 'Moon'; // Name for raycasting
+
+                    const moonOrbit = new THREE.Object3D();
+                    moonOrbit.add(moon);
+                    planet.add(moonOrbit); // Moon orbits Earth (which is 'planet' here)
+                    moon.position.x = data.moonDistance;
+                    moon.userData.orbit = moonOrbit;
+                    moon.userData.orbitalPeriod = 0.0748; // Approx 27.3 Earth days / 365 days
+                    planets.push(moon); // Add moon to planets array for raycasting
+
+                    // Add orbital path for the Moon
+                    const moonOrbitLineGeometry = new THREE.RingGeometry(data.moonDistance - 0.05, data.moonDistance + 0.05, 64);
+                    const moonOrbitLineMaterial = new THREE.MeshBasicMaterial({
+                        color: 0x666666, // Slightly darker grey for moon orbit
+                        side: THREE.DoubleSide,
+                        transparent: true,
+                        opacity: 0.2
+                    });
+                    const moonOrbitLine = new THREE.Mesh(moonOrbitLineGeometry, moonOrbitLineMaterial);
+                    moonOrbitLine.rotation.x = Math.PI / 2;
+                    moonOrbit.add(moonOrbitLine); // Add moon's orbit line to its parent (Earth's orbit object)
+                }
+            }
+
+            // Create a starfield background
+            const starGeometry = new THREE.BufferGeometry();
+            const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5 });
+            const starVertices = [];
+            for (let i = 0; i < 10000; i++) {
+                const x = (Math.random() - 0.5) * 2000;
+                const y = (Math.random() - 0.5) * 2000;
+                const z = (Math.random() - 0.5) * 2000;
+                starVertices.push(x, y, z);
+            }
+            starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
+            const stars = new THREE.Points(starGeometry, starMaterial);
+            scene.add(stars);
+
+            // Initialise Tone.js audio
+            initAudio();
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize, false);
+            renderer.domElement.addEventListener('click', onClick, false);
+
+            animate();
+        }
+
+        function initAudio() {
+            // Create a simple synth for ambient sound
+            synth = new Tone.Synth({
+                oscillator: { type: "sine" },
+                envelope: {
+                    attack: 2,
+                    decay: 1,
+                    sustain: 0.8,
+                    release: 5
+                }
+            }).toDestination();
+
+            // Create a loop for a sustained, dark drone
+            loop = new Tone.Loop(time => {
+                // Play a low, sustained note
+                synth.triggerAttackRelease("C2", "8n", time);
+                synth.triggerAttackRelease("G1", "8n", time + 0.5);
+            }, "4n").start(0); // Start immediately
+
+            Tone.Transport.bpm.value = 30; // Slow BPM for a dark, empty feel
+            Tone.Transport.start();
+            Tone.Master.volume.value = -20; // Start quietly
+        }
+
+        // Make toggleMusic globally accessible
+        window.toggleMusic = function() {
+            if (Tone.context.state !== 'running') {
+                Tone.start(); // Resume audio context on first user interaction
+            }
+
+            if (isPlaying) {
+                Tone.Master.mute = true;
+                audioIcon.innerHTML = `<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .9-.2 1.76-.54 2.59l1.49 1.49C20.82 14.64 21 13.37 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.81 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.28 4.28c-.9.67-1.98 1.18-3.17 1.47v2.06c2.72-.66 4.98-2.62 6.07-5.04L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>`; // Muted icon
+            } else {
+                Tone.Master.mute = false;
+                audioIcon.innerHTML = `<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.81 5 3.54 5 6.71s-2.11 5.9-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>`; // Unmuted icon
+            }
+            isPlaying = !isPlaying;
+        };
+
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        let sunFlareTimer = 0;
+        const sunFlareInterval = 0.5; // seconds between potential flares
+        const sunFlareDuration = 1; // seconds for a flare to fade
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Orbit animation for planets
+            for (const planetMesh of planets) {
+                if (planetMesh.userData.orbit) {
+                    // Rotate the orbit object, not the planet mesh itself
+                    // The orbital speed is inversely proportional to the orbital period
+                    // Adjusted speed for better visualisation with closer planets
+                    planetMesh.userData.orbit.rotation.y += 0.01 / planetMesh.userData.orbitalPeriod;
+
+                    // If it's the Moon, make it orbit Earth
+                    if (planetMesh.name === 'Moon') {
+                        // The moon's orbit is relative to its parent (Earth)
+                        planetMesh.userData.orbit.rotation.y += 0.05 / planetMesh.userData.orbitalPeriod; // Faster rotation for moon
+                    }
+                }
+            }
+
+            // Sun Flare animation
+            sunFlareTimer += 0.016; // Approx time for 60fps
+            if (sunFlareTimer > sunFlareInterval && Math.random() < 0.1) { // 10% chance to start a flare
+                sunFlareTimer = 0;
+                // Spawn a few new flare particles
+                for (let i = 0; i < 5; i++) {
+                    if (sunFlareParticles.length < maxFlareParticles) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const x = Math.cos(angle) * planetData.Sun.radius * 1.1; // Start slightly outside sun
+                        const y = Math.sin(angle) * planetData.Sun.radius * 1.1;
+                        const z = (Math.random() - 0.5) * planetData.Sun.radius * 0.5; // Slight Z variation
+
+                        sunFlareParticles.push({
+                            position: new THREE.Vector3(x, y, z),
+                            velocity: new THREE.Vector3(Math.random() * 0.5 - 0.25, Math.random() * 0.5 - 0.25, Math.random() * 0.1 - 0.05).normalize().multiplyScalar(0.5),
+                            life: 0,
+                            maxLife: sunFlareDuration * (0.5 + Math.random() * 0.5) // Random life duration
+                        });
+                    }
+                }
+            }
+
+            // Update and render flare particles
+            let particleIdx = 0;
+            const positions = flareParticleGeometry.attributes.position.array;
+            const opacities = flareParticleGeometry.attributes.opacity.array;
+
+            for (let i = sunFlareParticles.length - 1; i >= 0; i--) {
+                const particle = sunFlareParticles[i];
+                particle.position.add(particle.velocity);
+                particle.life += 0.016; // Increment life based on frame time
+
+                const opacity = 1 - (particle.life / particle.maxLife);
+                particle.opacity = Math.max(0, opacity); // Ensure opacity doesn't go below 0
+
+                if (particle.life > particle.maxLife) {
+                    sunFlareParticles.splice(i, 1); // Remove dead particles
+                } else {
+                    positions[particleIdx * 3] = particle.position.x;
+                    positions[particleIdx * 3 + 1] = particle.position.y;
+                    positions[particleIdx * 3 + 2] = particle.position.z;
+                    opacities[particleIdx] = particle.opacity;
+                    particleIdx++;
+                }
+            }
+
+            // Clear unused positions/opacities
+            for (let i = particleIdx; i < maxFlareParticles; i++) {
+                positions[i * 3] = 0;
+                positions[i * 3 + 1] = 0;
+                positions[i * 3 + 2] = 0;
+                opacities[i] = 0;
+            }
+
+            flareParticleGeometry.attributes.position.needsUpdate = true;
+            flareParticleGeometry.attributes.opacity.needsUpdate = true;
+
+
+            controls.update(); // Only required if controls.enableDamping or controls.autoRotate are set to true
+            renderer.render(scene, camera);
+        }
+
+        function onClick(event) {
+            // Calculate mouse position in normalized device coordinates (-1 to +1)
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            // Update the raycaster with the camera and mouse position
+            raycaster.setFromCamera(mouse, camera);
+
+            // Calculate objects intersecting the raycaster
+            const intersects = raycaster.intersectObjects(planets);
+
+            if (intersects.length > 0) {
+                const clickedObject = intersects[0].object;
+                displayPlanetInfo(clickedObject.name);
+            } else {
+                // If clicked outside any planet, hide the info panel
+                hideInfoPanel();
+            }
+        }
+
+        function displayPlanetInfo(planetName) {
+            const infoPanel = document.getElementById('info-panel');
+            const planetNameElement = document.getElementById('planet-name');
+            const planetDescriptionElement = document.getElementById('planet-description');
+            const loadingIndicator = document.getElementById('loading-indicator');
+
+            planetNameElement.textContent = planetName;
+            
+            const data = planetData[planetName];
+            planetDescriptionElement.textContent = data.description;
+            
+            infoPanel.style.display = 'block';
+            loadingIndicator.style.display = 'none'; // No loading needed as descriptions are embedded
+        }
+
+        // Make hideInfoPanel globally accessible
+        window.hideInfoPanel = function() {
+            document.getElementById('info-panel').style.display = 'none';
+        };
+
+        window.onload = function() {
+            init();
+        };
+    </script>
+</body>
+</html>
