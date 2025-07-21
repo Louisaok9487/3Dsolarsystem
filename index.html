@@ -311,7 +311,7 @@
                 if (name !== 'Sun') { // No orbit for the Sun itself
                     const orbitGeometry = new THREE.RingGeometry(data.distance - 0.1, data.distance + 0.1, 128); // Thin ring
                     const orbitMaterial = new THREE.MeshBasicMaterial({
-                        color: 0x444444, // Dark grey for orbit line
+                        color: 0xAAAAAA, // Light grey for orbit line (changed from 0x444444)
                         side: THREE.DoubleSide,
                         transparent: true,
                         opacity: 0.3
@@ -358,7 +358,7 @@
                     // Add orbital path for the Moon
                     const moonOrbitLineGeometry = new THREE.RingGeometry(data.moonDistance - 0.05, data.moonDistance + 0.05, 64);
                     const moonOrbitLineMaterial = new THREE.MeshBasicMaterial({
-                        color: 0x666666, // Slightly darker grey for moon orbit
+                        color: 0xCCCCCC, // Light grey for moon orbit (changed from 0x666666)
                         side: THREE.DoubleSide,
                         transparent: true,
                         opacity: 0.2
